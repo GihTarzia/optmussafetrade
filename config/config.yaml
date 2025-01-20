@@ -1,0 +1,213 @@
+sistema:
+  modo: 'producao'
+  debug: false
+  auto_restart: true
+  max_memoria: 1024  # MB
+  interface_web: true
+  max_threads: 4
+  retry_attempts: 3
+
+ml_parametros:
+  cache_timeout: 60
+  features:
+    periodos_rsi: [7, 14, 21, 28]
+    periodos_macd: [[12, 26, 9], [8, 21, 5], [5, 35, 5]]
+    periodos_bb: [20, 30, 40]
+    periodos_ema: [9, 21, 50, 100, 200]
+    volume_periodos: [5, 10, 20]
+  
+padroes:
+  candlestick:
+    doji:
+      corpo_max: 0.1
+      min_confirmacoes: 2
+    martelo:
+      sombra_ratio: 2.0
+      min_confirmacoes: 2
+    estrela_cadente:
+      sombra_ratio: 2.0
+      min_confirmacoes: 2
+    engolfo:
+      min_range: 0.0002
+      min_confirmacoes: 2
+  
+  tendencia:
+    min_inclinacao: 0.0002
+    min_confirmacoes: 2
+
+trading:
+  payout: 0.85  # 85% de retorno
+  valor_entrada: 50  # Valor padrão de entrada
+  tempos_expiracao: [10, 15]  # Tempos disponíveis
+  tempo_padrao: 1  # Tempo padrão
+  max_loss_sequencia: 2  # Máximo de perdas seguidas
+  stop_loss: -350  # Stop loss diário
+  stop_win: 100    # Stop win diário
+  saldo_inicial: 1000  # Saldo inicial
+  risco_por_operacao: 0.01  # Reduzido para 1%
+  stop_diario: -0.05        # Reduzido para 5%
+  meta_diaria: 0.03         # Reduzido para 3%
+  max_operacoes_dia: 15     # Reduzido para mais conservador
+  min_intervalo_operacoes: 300  # 5 minutos
+  tempo_expiracao_padrao: 5
+  max_drawdown: 0.10        # 10% máximo
+  win_rate_minimo: 0.58     # Aumentado
+  
+  controles:
+    max_operacoes_simultaneas: 10
+    max_sinais_hora: 10
+    min_confirmacoes: 4
+    tempo_entre_sinais: 300  # 5 minutos
+    min_operacoes_validacao: 30
+    max_exposicao_ativo: 0.20  # Máximo 20% por ativo
+    correlacao_maxima: 0.7   # Correlação máxima entre ativos
+    min_probabilidade: 2
+
+analise:
+  indicadores_tecnicos:
+    ema_rapida: 5
+    ema_media: 13
+    cci_periodo: 20
+    force_index_periodo: 13
+    min_confirmacoes: 2
+    volume_min_ratio: 1.2
+    
+  rsi:
+    periodo: 14
+    sobrevenda: 30
+    sobrecompra: 70
+    peso: 1.5
+
+  medias_moveis:
+    curta: 9
+    media: 21
+    longa: 50
+    peso: 2.0
+
+  bandas_bollinger:
+    periodo: 20
+    desvio: 2.2
+    peso: 1.8
+
+  macd:
+    rapida: 12
+    lenta: 26
+    sinal: 9
+    peso: 1.5
+
+  stochastic:
+    k_periodo: 14
+    d_periodo: 3
+    sobrevenda: 20
+    sobrecompra: 80
+    peso: 1.3
+
+  min_score_entrada: 0.75     # Aumentado
+  min_assertividade: 65.0
+  confirmacoes_necessarias: 3  # Aumentado
+
+volatilidade:
+  min: 0.0005  # Ajustado para escala diária
+  max: 0.025   # Ajustado para escala diária
+  periodo_calculo: 20
+  filtro_outliers: true
+  peso: 1.8
+
+volume:
+  min_padrao: 1000
+  multiplicador_media: 1.5
+  periodo_media: 20
+  peso: 1.2
+
+ativos:
+  forex:  # Pares mais líquidos
+    - 'EURUSD=X'
+    - 'JPY=X'
+    - 'GBPUSD=X'
+    - 'EURGBP=X'
+    - 'EURJPY=X'
+    - 'GBPJPY=X'
+    - 'AUDJPY=X'
+    - 'AUDCAD=X'
+
+  config:
+    volatilidade_min: 0.0005
+    volatilidade_max: 0.025
+    volume_min: 50
+    tempo_padrao: 1
+    min_range_candle: 0.0002
+
+horarios:
+  inicio_operacoes: 07  # Alterado de 07:00
+  fim_operacoes: 22   # Alterado de 19:00
+  horarios_bloqueados:
+    - '15:00-15:30'  # Abertura NY
+  dias_operacionais:
+    - 'Monday'
+    - 'Tuesday'
+    - 'Wednesday'
+    - 'Thursday'
+    - 'Friday'
+    - 'Saturday'    
+    - 'Sunday'
+  analise_horarios:
+    min_operacoes_horario: 10
+    win_rate_minimo_horario: 0.58
+    atualizar_analise: true
+    periodo_analise: 30  # dias
+
+otimizacao:
+  intervalo: 14400  # 4 horas
+  min_operacoes: 50
+  min_dias_dados: 30
+  min_melhoria: 0.05  # 5% melhoria mínima
+  max_trials: 150
+  timeout: 7200      # 2 horas
+  early_stopping: true
+  cross_validation: true
+  
+  metricas:
+    win_rate: 0.4
+    profit_factor: 0.3
+    drawdown: 0.2
+    sharpe: 0.1
+
+ml_config:
+  treino_automatico: true
+  intervalo_treino: 86400  # 24 horas
+  min_amostras_treino: 500
+  validacao_cruzada: true
+  early_stopping: true
+  max_depth: 6
+  min_confirmacoes: 4
+  learning_rate: 0.01
+  n_estimators: 500
+  min_probabilidade: 0.78
+  min_accuracy: 0.65
+
+gerenciamento_risco:
+  fator_kelly: 0.3
+  stop_out: true
+  trailing_stop: true
+  hedge_automatico: false
+  
+  limites:
+    drawdown_maximo: 0.10
+    exposicao_maxima: 0.20
+    perda_maxima_trade: 0.02
+    max_correlacao: 0.7
+
+notificacoes:
+  telegram:
+    ativo: true
+    token: '7906357537:AAHIU7JotNw2bQ46cSnruCtRmC65DCTAGvQ'
+    chat_id: '-1002281083879'
+
+database:
+  tipo: 'sqlite'
+  path: 'data/trading_bot.db'
+  backup_automatico: true
+  intervalo_backup: 86400  # 24 horas
+  max_registros: 10000
+  limpar_automatico: true
+  dias_retencao: 1

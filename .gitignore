@@ -2,6 +2,7 @@
 __pycache__/
 *.py[cod]
 *$py.class
+OLDmain_optgo.py
 
 # C extensions
 *.so
