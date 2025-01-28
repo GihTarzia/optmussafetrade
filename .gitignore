@@ -3,7 +3,9 @@ __pycache__/
 *.py[cod]
 *$py.class
 OLDmain_optgo.py
-
+data/
+backup/
+models/saved/
 # C extensions
 *.so
 

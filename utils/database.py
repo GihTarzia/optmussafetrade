@@ -1,16 +1,15 @@
 import sqlite3
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Optional
 import threading
 from pathlib import Path
 from queue import Queue
 from contextlib import contextmanager
-import pytz
-import yfinance as yf
 import asyncio
-from datetime import datetime, time
+from datetime import datetime
+import traceback
 
 class ConnectionPool:
     def __init__(self, db_path: str, max_connections: int = 5):
@@ -27,26 +26,16 @@ class ConnectionPool:
     
     @contextmanager
     def get_connection(self):
-        max_retries = 5
-        retry_delay = 0.1  # segundos
-
-        for attempt in range(max_retries):
-            try:
-                connection = self.connections.get(timeout=1)
+        connection = None
+        try:
+            connection = self.connections.get(timeout=5)
+            yield connection
+        finally:
+            if connection:
                 try:
-                    yield connection
-                finally:
                     self.connections.put(connection)
-                break
-            except Exception as e:
-                if attempt == max_retries - 1:
-                    raise
-                asyncio.sleep(retry_delay * (attempt + 1))
-    
-    def close_all(self):
-        while not self.connections.empty():
-            conn = self.connections.get()
-            conn.close()
+                except:
+                    connection.close()
 
 class DatabaseManager:
     def __init__(self, logger, db_path: str = 'data/trading_bot.db'):
@@ -79,283 +68,128 @@ class DatabaseManager:
             conn.commit()
     
     def _init_database(self):
-        """Inicializa as tabelas com otimizações"""
-        with self.pool.get_connection() as conn:
-            cursor = conn.cursor()
-            
-            # Tabela de preços com particionamento por data
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS precos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ativo TEXT NOT NULL,
-                    timestamp DATETIME NOT NULL,
-                    open REAL NOT NULL,
-                    high REAL NOT NULL,
-                    low REAL NOT NULL,
-                    close REAL NOT NULL,
-                    volume REAL,
-                    date_partition TEXT GENERATED ALWAYS AS (date(timestamp)) VIRTUAL,
-                    hour_partition INTEGER GENERATED ALWAYS AS (strftime('%H', timestamp)) VIRTUAL,
-                    UNIQUE(ativo, timestamp)
-                )
-            ''')
-  
-            # Tabela de sinais com cache de resultados
-            cursor.execute('''
-CREATE TABLE IF NOT EXISTS sinais (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    ativo TEXT NOT NULL,
-    timestamp DATETIME NOT NULL,
-    direcao TEXT NOT NULL,
-    preco_entrada REAL NOT NULL,
-    preco_saida REAL,
-    tempo_expiracao INTEGER NOT NULL,
-    score REAL NOT NULL,
-    assertividade REAL NOT NULL,
-    resultado TEXT,
-    lucro REAL,
-    padroes TEXT,
-    indicadores TEXT,
-    ml_prob REAL,
-    volatilidade REAL,
-    processado BOOLEAN DEFAULT 0,
-    data_processamento DATETIME,
-    -- Restrição de unicidade para evitar duplicatas
-    UNIQUE(ativo, timestamp, direcao, preco_entrada, tempo_expiracao)
-);
-            ''')
-
-            # Tabela de métricas com resumos pré-calculados
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS metricas_resumo (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    ativo TEXT NOT NULL,
-                    periodo TEXT NOT NULL,
-                    data_calculo DATETIME NOT NULL,
-                    win_rate REAL,
-                    profit_factor REAL,
-                    total_operacoes INTEGER,
-                    media_assertividade REAL,
-                    UNIQUE(ativo, periodo, data_calculo)
-                )
-            ''')
-            
-            # Nova tabela para resultados de backtest
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS backtest_resultados (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    timestamp DATETIME NOT NULL,
-                    total_trades INTEGER NOT NULL,
-                    win_rate REAL NOT NULL,
-                    profit_factor REAL NOT NULL,
-                    drawdown_maximo REAL NOT NULL,
-                    retorno_total REAL NOT NULL,
-                    metricas TEXT NOT NULL,
-                    melhores_horarios TEXT NOT NULL,
-                    evolucao_capital TEXT NOT NULL
-                )
-            ''')           
-            
-            cursor.execute('''
-                CREATE TABLE IF NOT EXISTS analises_detalhadas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    sinal_id INTEGER NOT NULL,
-                    dados_analise TEXT NOT NULL,
-                    timestamp DATETIME NOT NULL,
-                    FOREIGN KEY(sinal_id) REFERENCES sinais(id),
-                    UNIQUE(sinal_id)
-                )
-            ''')
-            
-            # Índices otimizados
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_ativo_date ON precos(ativo, date_partition, hour_partition)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_timestamp_range ON precos(timestamp, ativo)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_timestamp ON sinais(timestamp, ativo)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_processado ON sinais(processado, timestamp)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_analises_sinal_id ON analises_detalhadas(sinal_id)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_volume ON precos(volume) WHERE volume > 0')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_timestamp_ativo ON precos(timestamp, ativo)')
-            cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_resultado ON sinais(resultado) WHERE resultado IS NOT NULL')
-
-            conn.commit()
-            
-    def get_horarios_sucesso(self, ativo: str) -> Dict[str, float]:
-        """Análise de horários otimizada"""
+        """Inicializa o banco de dados com as tabelas necessárias"""
         try:
-            cache_key = f"horarios_{ativo}"
-            if cache_key in self.cache['horarios']:
-                return self.cache['horarios'][cache_key]
-
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
 
-                query = """
-                    WITH horarios_wins AS (
-                        SELECT 
-                            strftime('%H:%M', timestamp) AS horario,
-                            COUNT(CASE WHEN resultado = 'WIN' THEN 1 END) * 1.0 / COUNT(*) AS taxa_sucesso,
-                            COUNT(*) as total_ops
-                        FROM sinais 
-                        WHERE ativo = ?
-                        AND timestamp >= datetime('now', '-7 days')
-                        AND resultado IS NOT NULL
-                        GROUP BY strftime('%H:%M', timestamp)
-                        HAVING total_ops >= 5
+                # Tabela de preços com particionamento por data
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS precos (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ativo TEXT NOT NULL,
+                        timestamp DATETIME NOT NULL,
+                        open REAL NOT NULL,
+                        high REAL NOT NULL,
+                        low REAL NOT NULL,
+                        close REAL NOT NULL,
+                        volume REAL,
+                        date_partition TEXT GENERATED ALWAYS AS (date(timestamp)) VIRTUAL,
+                        hour_partition INTEGER GENERATED ALWAYS AS (strftime('%H', timestamp)) VIRTUAL,
+                        UNIQUE(ativo, timestamp)
                     )
-                    SELECT horario, taxa_sucesso
-                    FROM horarios_wins
-                    WHERE taxa_sucesso >= 0.55
-                    ORDER BY taxa_sucesso DESC
-                """
+                ''')
+  
+                    # Tabela de sinais com cache de resultados
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS sinais (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        ativo TEXT NOT NULL,
+                        timestamp DATETIME NOT NULL,
+                        direcao TEXT NOT NULL,
+                        preco_entrada REAL NOT NULL,
+                        preco_saida REAL,
+                        tempo_expiracao INTEGER NOT NULL,
+                        score REAL NOT NULL,
+                        assertividade REAL NOT NULL DEFAULT 50.0,
+                        resultado TEXT,
+                        padroes TEXT,
+                        indicadores TEXT,
+                        ml_prob REAL,
+                        volatilidade REAL,
+                        processado BOOLEAN DEFAULT 0,
+                        data_processamento DATETIME,
+                        momentum_score REAL,
+                        momento_entrada DATETIME,
+                        probabilidade REAL NOT NULL DEFAULT 0,
+                        
+                        -- Restrição de unicidade para evitar duplicatas
+                        UNIQUE(ativo, timestamp, direcao, preco_entrada, tempo_expiracao)
+                    )
+                ''')     
+            
+                # Índices otimizados
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_ativo_date ON precos(ativo, date_partition, hour_partition)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_timestamp_range ON precos(timestamp, ativo)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_timestamp ON sinais(timestamp, ativo)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_processado ON sinais(processado, timestamp)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_volume ON precos(volume) WHERE volume > 0')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_precos_timestamp_ativo ON precos(timestamp, ativo)')
+                cursor.execute('CREATE INDEX IF NOT EXISTS idx_sinais_resultado ON sinais(resultado) WHERE resultado IS NOT NULL')
 
-                cursor.execute(query, (ativo,))
-                resultados = {row[0]: row[1] for row in cursor.fetchall()}
+                # Configurações para evitar locks
+                cursor.execute('PRAGMA journal_mode=WAL')  # Write-Ahead Logging
+                cursor.execute('PRAGMA busy_timeout=5000')  # 5 segundos de timeout
+                cursor.execute('PRAGMA synchronous=NORMAL')  # Menos rigoroso com sync
 
-                # Cache por 5 minutos
-                self.cache['horarios'][cache_key] = resultados
-
-                self.logger.info(f"Horários de sucesso calculados para {ativo}")
-                return resultados
-
-        except Exception as e:
-            self.logger.error(f"Erro ao obter horários de sucesso: {str(e)}")
-            return {}
-      
-      
-        
-    def get_taxa_sucesso_horario(self, hora: int) -> float:
-        """Retorna taxa de sucesso para um horário específico"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-
-                query = """
-                    SELECT 
-                        COUNT(CASE WHEN resultado = 'WIN' THEN 1 END) * 1.0 / COUNT(*) as taxa_sucesso,
-                        COUNT(*) as total_operacoes
-                    FROM sinais
-                    WHERE strftime('%H', timestamp) = ?
-                    AND resultado IS NOT NULL
-                    AND timestamp >= datetime('now', '-30 days')
-                """
-
-                cursor.execute(query, (f"{hora:02d}",))
-                resultado = cursor.fetchone()
-
-                if resultado and resultado[0] is not None:
-                    total_ops = resultado[1]
-                    # Só considera taxa se tiver mínimo de operações
-                    if total_ops >= 10:  # Mínimo de 10 operações para considerar
-                        return float(resultado[0])
-                return 0.65  # Taxa neutra se não houver dados
-
-        except Exception as e:
-            self.logger.error(f"Erro ao obter taxa de sucesso do horário: {str(e)}")
-            return 0.65
-        
-    def get_assertividade_recente(self, ativo: str, direcao: str, tempo_expiracao: int) -> Optional[float]:
-        """Retorna a assertividade média recente para um ativo e direção"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                query = """
-                SELECT AVG(assertividade) as assertividade_media,
-                       COUNT(*) as total_ops,
-                       SUM(CASE WHEN resultado = 'WIN' THEN 1 ELSE 0 END) * 100.0 / COUNT(*) as win_rate
-                FROM sinais
-                WHERE ativo = ?
-                AND direcao = ?
-                AND tempo_expiracao = ?
-                AND timestamp >= datetime('now', '-3 days')
-                AND resultado IS NOT NULL
-                HAVING total_ops >= 10
-                """
-                
-                cursor.execute(query, (ativo, direcao, tempo_expiracao))
-                result = cursor.fetchone()
-                
-                if result and result[0] is not None:
-                    return float(result[0])
-                return 50.0  # Valor padrão se não houver dados
-        
-        except Exception as e:
-            self.logger.error(f"Erro ao obter assertividade recente: {str(e)}")
-            return None
-        
-    # Adicionar novo método para salvar resultados
-    async def salvar_resultados_backtest(self, resultados: Dict) -> bool:
-        """Salva resultados de backtest com métricas detalhadas"""
-        try:
-            with await self.transaction() as conn:
-                cursor = conn.cursor()
-
-                query = '''
-                    INSERT INTO backtest_resultados (
-                        timestamp, 
-                        total_trades, 
-                        win_rate, 
-                        profit_factor,
-                        drawdown_maximo, 
-                        retorno_total, 
-                        metricas,
-                        melhores_horarios, 
-                        evolucao_capital,
-                        volatilidade_media,
-                        tempo_medio_operacao,
-                        sharpe_ratio
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                '''
-
-                metricas = resultados['metricas']
-
-                cursor.execute(query, (
-                    datetime.now(),
-                    metricas['total_trades'],
-                    metricas['win_rate'],
-                    metricas['profit_factor'],
-                    metricas['drawdown_maximo'],
-                    metricas['retorno_total'],
-                    json.dumps(metricas),
-                    json.dumps(resultados['melhores_horarios']),
-                    json.dumps(resultados['evolucao_capital']),
-                    metricas.get('volatilidade_media', 0),
-                    metricas.get('tempo_medio_operacao', 0),
-                    metricas.get('sharpe_ratio', 0)
-                ))
-
-                self.logger.info("Resultados do backtest salvos com sucesso")
-                return True
-
-        except Exception as e:
-            self.logger.error(f"Erro ao salvar resultados do backtest: {str(e)}")
-            return False
-
-    async def limpar_dados_antigos(self, dias_retencao: int = 90) -> bool:
-        """Limpa dados antigos do banco"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                # Limpa preços antigos
-                cursor.execute("""
-                    DELETE FROM precos 
-                    WHERE timestamp < datetime('now', ? || ' days')
-                """, (-dias_retencao,))
-                
-                # Limpa sinais antigos
-                cursor.execute("""
-                    DELETE FROM sinais 
-                    WHERE timestamp < datetime('now', ? || ' days')
-                """, (-dias_retencao,))
-                
                 conn.commit()
-                self.logger.info(f"Dados anteriores a {dias_retencao} dias removidos")
-                return True
-                
+                self.logger.info("Banco de dados inicializado com sucesso")
+
         except Exception as e:
-            self.logger.error(f"Erro na limpeza de dados: {str(e)}")
-            return False
+            self.logger.error(f"Erro ao inicializar banco: {str(e)}")
+            self.logger.error(traceback.format_exc())
+
+    async def get_taxa_sucesso_horario_ativo(self, hora: int, ativo: str) -> float:
+       """Retorna taxa de sucesso para horário e ativo específicos"""
+       try:
+           with self.pool.get_connection() as conn:
+               cursor = conn.cursor()
+
+               query = """
+                   SELECT 
+                       COUNT(CASE WHEN resultado = 'WIN' THEN 1 END) * 100.0 / COUNT(*) as win_rate
+                   FROM sinais
+                   WHERE strftime('%H', timestamp) = ?
+                   AND ativo = ?
+                   AND processado = 1
+                   AND datetime(timestamp) >= datetime('now', '-30 days')
+               """
+
+               cursor.execute(query, (str(hora).zfill(2), ativo))
+               resultado = cursor.fetchone()
+
+               return float(resultado[0]) if resultado and resultado[0] else 50.0
+
+       except Exception as e:
+           self.logger.error(f"Erro ao obter taxa de sucesso: {str(e)}")
+           return 50.0     
+ 
+    async def limpar_dados_antigos(self, dias: int = 90) -> None:
+        """Limpa dados mais antigos que X dias"""
+        try:
+            self.logger.info(f"Iniciando limpeza de dados antigos ({dias} dias)")
+            
+            data_limite = datetime.now() - timedelta(days=dias)
+            
+            # Limpa tabela de preços
+            query_precos = """
+            DELETE FROM precos 
+            WHERE timestamp < :data_limite
+            """
+            await self.execute(query_precos, {'data_limite': data_limite})
+            
+            # Limpa tabela de sinais
+            query_sinais = """
+            DELETE FROM sinais 
+            WHERE timestamp < :data_limite
+            """
+            await self.execute(query_sinais, {'data_limite': data_limite})
+            
+            self.logger.info(f"Limpeza de dados antigos concluída")
+            
+        except Exception as e:
+            self.logger.error(f"Erro ao limpar dados antigos: {str(e)}")
+            self.logger.error(traceback.format_exc())
         
         
     @contextmanager
@@ -379,174 +213,9 @@ CREATE TABLE IF NOT EXISTS sinais (
                     raise
                 self.logger.warning(f"Tentativa {attempt + 1} falhou, tentando novamente...")
                 await asyncio.sleep(retry_delay * (attempt + 1))
-    
-            
-    async def get_dados_mercado(self, ativo: str) -> pd.DataFrame:
-        cache_key = f"mercado_{ativo}"
-
-        try:
-            # Verifica cache
-            if cache_key in self.cache['dados_mercado']:
-                data, timestamp = self.cache['dados_mercado'][cache_key]
-                if (datetime.now() - timestamp).total_seconds() < self.cache_timeout:
-                    return data
-
-            dados = await self._baixar_dados_mercado(ativo)
-            await self.salvar_precos_novos(ativo, dados)
-            
-            if not dados.empty:
-                self.logger.info(f"Dados obtidos para {ativo}: {len(dados)} registros")
-                self.cache['dados_mercado'][cache_key] = (dados, datetime.now())
-                return dados
-
-            else:
-                self.logger.warning(f"Nenhum dado retornado do yfinance para {ativo}")
-                return pd.DataFrame()
-        except Exception as e:
-            self.logger.error(f"Erro ao obter dados de mercado: {str(e)}")
-            return pd.DataFrame()
-
-    async def _baixar_dados_mercado(self, ativo: str) -> pd.DataFrame:
-        max_retries = 3
-        retry_delay = 2  # segundos
-
-        for attempt in range(max_retries):
-            try:
-                df = yf.download(
-                    ativo,
-                    period="1d",
-                    interval="1m",
-                    progress=False
-                )
-
-                if not df.empty:
-                    return df
-
-                if attempt < max_retries - 1:
-                    self.logger.warning(f"Tentativa {attempt + 1} falhou para {ativo}, tentando novamente...")
-                    await asyncio.sleep(retry_delay * (attempt + 1))
-
-            except Exception as e:
-                self.logger.error(f"Erro ao baixar dados de mercado para {ativo}: {str(e)}")
-                return pd.DataFrame()
-
-    async def get_preco(self, ativo: str, momento: datetime) -> Optional[float]:
-        """Obtém preço com otimização de busca"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-
-                # Busca exata primeiro
-                momento_str = momento.astimezone(pytz.UTC).strftime('%Y-%m-%d %H:%M:%S')
-                cursor.execute("""
-                    SELECT close
-                    FROM precos
-                    WHERE ativo = ? AND timestamp = ?
-                    LIMIT 1
-                """, (ativo, momento_str))
-
-                resultado = cursor.fetchone()
-                if resultado:
-                    return resultado[0]
-
-                # Busca mais próximo dentro de 90 segundos
-                cursor.execute("""
-                    SELECT close, 
-                           ABS(STRFTIME('%s', timestamp) - STRFTIME('%s', ?)) as diff
-                    FROM precos
-                    WHERE ativo = ?
-                      AND timestamp BETWEEN datetime(?, '-1 seconds') 
-                                      AND datetime(?, '+90 seconds')
-                    ORDER BY diff ASC
-                    LIMIT 1
-                """, (momento_str, ativo, momento_str, momento_str))
-
-                resultado = cursor.fetchone()
-                if resultado:
-                    return resultado[0]
-
-                return None
-
-        except Exception as e:
-            self.logger.error(f"Erro ao recuperar preço: {str(e)}")
-            return None
-
-
-    async def atualizar_resultado_sinal(self, sinal_id: int, **kwargs) -> bool:
-        """Atualiza resultado de um sinal"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-
-                query = '''
-                    UPDATE sinais
-                    SET resultado = ?,
-                        lucro = ?,
-                        preco_saida = ?,
-                        processado = 1,
-                        data_processamento = ?
-                    WHERE id = ?
-                '''
-
-                cursor.execute(query, (
-                    kwargs['resultado'],
-                    kwargs['lucro'],
-                    kwargs['preco_saida'],
-                    kwargs['data_processamento'].strftime('%Y-%m-%d %H:%M:%S'),
-                    sinal_id
-                ))
-
-                conn.commit()
-                return True
-
-        except Exception as e:
-            self.logger.error(f"Erro ao atualizar resultado do sinal: {str(e)}")
-            return False
-
-    async def registrar_sinal(self, sinal: Dict) -> Optional[int]:
-        """Registra sinal com validações aprimoradas"""
-        try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-                
-                indicadores = json.dumps(sinal.get('indicadores', {}))  # Converte para string JSON
-
-
-                assertividade = min(100, max(0, sinal['assertividade']))
-                padroes = json.dumps(sinal.get('padroes_forca', 0))
-
-                cursor.execute("""
-                    INSERT INTO sinais (
-                        ativo, timestamp, direcao, preco_entrada,
-                        tempo_expiracao, score, assertividade, padroes,
-                        ml_prob, volatilidade, indicadores, processado
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """, (
-                    sinal['ativo'],
-                    sinal['momento_entrada'].strftime('%Y-%m-%d %H:%M:%S'),
-                    sinal['direcao'],
-                    sinal['preco_entrada'],
-                    sinal['tempo_expiracao'],
-                    sinal['score'],
-                    assertividade,
-                    padroes,
-                    sinal['ml_prob'],
-                    sinal['volatilidade'],
-                    indicadores,  # Agora é string JSON
-                    False
-                ))
-
-                conn.commit()
-                sinal_id = cursor.lastrowid
-                self.logger.info(f"Sinal {sinal_id} registrado para {sinal['ativo']}")
-                return sinal_id
-
-        except Exception as e:
-            self.logger.error(f"Erro ao registrar sinal: {str(e)}")
-            return None
-        
+         
     async def valida_sinal_repetido(self, sinal: Dict) -> Optional[int]:
-        """Valida sinal repetido com mesmo ativo, direcao, preco_entrada e timestamp (sem milissegundo)"""
+        """Valida sinal repetido com mesmo ativo, direcao, preco_entrada e timestamp"""
         try:
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
@@ -557,8 +226,8 @@ CREATE TABLE IF NOT EXISTS sinais (
                     WHERE ativo = ? AND 
                           timestamp BETWEEN datetime(?, '-1 seconds') AND datetime(?, '+1 seconds')
                           AND direcao = ? AND preco_entrada = ? AND tempo_expiracao = ?
-                """, (sinal['ativo'], sinal['momento_entrada'].strftime('%Y-%m-%d %H:%M:%S'),
-                      sinal['momento_entrada'].strftime('%Y-%m-%d %H:%M:%S'),
+                """, (sinal['ativo'], sinal['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                      sinal['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
                       sinal['direcao'], sinal['preco_entrada'], sinal['tempo_expiracao']))
 
                 if cursor.fetchone():
@@ -568,109 +237,88 @@ CREATE TABLE IF NOT EXISTS sinais (
                 return False
 
         except Exception as e:
-            self.logger.error(f"Erro ao registrar sinal: {str(e)}")
+            self.logger.error(f"Erro ao validar sinal repetido: {str(e)}")
             return None
     
-    async def get_sinais_sem_resultado(self) -> List[Dict]:
-        """Recupera sinais pendentes de forma assíncrona"""
+    async def get_sinais_sem_resultado(self):
         try:
+            query = """
+            SELECT id, ativo, direcao, 
+                   strftime('%Y-%m-%d %H:%M:%S', timestamp) as timestamp, 
+                   tempo_expiracao, preco_entrada
+            FROM sinais 
+            WHERE processado = 0 
+            AND timestamp <= datetime('now', '-' || tempo_expiracao || ' minutes')
+            """
+            
             with self.pool.get_connection() as conn:
-                query = '''
-                    SELECT DISTINCT s.* 
-                    FROM sinais s
-                    WHERE s.resultado IS NULL 
-                    AND s.processado = 0
-                    AND datetime(s.timestamp, '+' || s.tempo_expiracao || ' minutes') <= datetime('now')
-                    AND s.timestamp >= datetime('now', '-1 day')
-                    ORDER BY s.timestamp DESC
-                '''
-                
                 cursor = conn.cursor()
                 cursor.execute(query)
-
-                sinais = []
-                for row in cursor.fetchall():
-                    sinal = dict(row)
-                    if isinstance(sinal['timestamp'], str):
-                        sinal['timestamp'] = datetime.strptime(
-                            sinal['timestamp'], 
-                            '%Y-%m-%d %H:%M:%S'
-                        )
-                    sinais.append(sinal)
+                sinais = cursor.fetchall()
                 
-                return sinais
-
+                return [{
+                    'id': s[0],
+                    'ativo': s[1],
+                    'direcao': s[2],
+                    'timestamp': datetime.strptime(s[3], '%Y-%m-%d %H:%M:%S'),
+                    'tempo_expiracao': s[4],
+                    'preco_entrada': float(s[5])
+                } for s in sinais]
+                
         except Exception as e:
             self.logger.error(f"Erro ao recuperar sinais pendentes: {str(e)}")
             return []
     
     async def salvar_precos_novos(self, ativo: str, dados: pd.DataFrame) -> bool:
-        """Salva preços com otimização para 1min"""
+        """Salva apenas novos preços na tabela"""
         try:
             if dados.empty:
+                self.logger.warning(f"Dados vazios para {ativo}")
                 return False
 
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
-
-                # Batch insert/update
-                batch_size = 1000
-                for i in range(0, len(dados), batch_size):
-                    batch = dados.iloc[i:i+batch_size]
-
-                    values = []
-                    for timestamp, row in batch.iterrows():
-                        timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
-                        values.append((
-                            ativo,
-                            timestamp_str,
-                            float(row['Open']),
-                            float(row['High']),
-                            float(row['Low']),
-                            float(row['Close']),
-                            float(row['Volume'])
-                        ))
-
-                    cursor.executemany("""
-                        INSERT INTO precos (
-                            ativo, timestamp, open, high, low, close, volume
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(ativo, timestamp) DO UPDATE SET
-                            open=excluded.open,
-                            high=excluded.high,
-                            low=excluded.low,
-                            close=excluded.close,
-                            volume=excluded.volume
-                    """, values)
-
-                conn.commit()
-                self.logger.info(f"Salvos {len(dados)} registros para {ativo}")
-                return True
-
-        except Exception as e:
-            self.logger.error(f"Erro ao salvar preços: {str(e)}")
-            return False
-    
-    # Correção da função salvar_precos
-    async def salvar_precos(self, ativo: str, dados: pd.DataFrame) -> bool:
-        """Salva dados de preços no banco de dados de forma assíncrona"""
-        try:
-            # Verifica colunas necessárias
-            colunas_requeridas = ['Open', 'High', 'Low', 'Close', 'Volume']
-            if not all(col in dados.columns for col in colunas_requeridas):
-                self.logger.error(f"Erro: DataFrame deve conter as colunas: {colunas_requeridas}")
-                return False
-    
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-    
-                # Prepara dados para inserção
-                rows = []
-                for timestamp, row in dados.iterrows():
-                    # Converte timestamp para string
-                    timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                
+                # Pega último timestamp salvo
+                cursor.execute("""
+                    SELECT MAX(timestamp) 
+                    FROM precos 
+                    WHERE ativo = ?
+                """, (ativo,))
+                
+                ultimo_registro = cursor.fetchone()[0]
+                
+                # Converte timestamps para UTC para garantir comparação correta
+                if ultimo_registro:
+                    ultimo_timestamp = pd.to_datetime(ultimo_registro).tz_localize('UTC')
+                else:
+                    ultimo_timestamp = pd.Timestamp.min.tz_localize('UTC')
+                
+                # Garante que o índice dos dados está em UTC
+                try:
+                    if dados.index.tz is None:
+                        dados.index = dados.index.tz_localize('UTC')
+                    else:
+                        # Usa tz_convert independente do tipo de timezone
+                        dados.index = dados.index.tz_convert('UTC')
+                except Exception as e:
+                    self.logger.error(f"Erro ao converter timezone: {str(e)}")
+                    # Se falhar, tenta localizar diretamente
+                    dados.index = pd.DatetimeIndex(dados.index).tz_localize('UTC', ambiguous='infer')
+                
+                # Filtra apenas dados novos
+                dados_novos = dados[dados.index > ultimo_timestamp]
+                
+                if dados_novos.empty:
+                    self.logger.debug(f"Nenhum dado novo para {ativo}")
+                    return True
                     
-                    rows.append((
+                # Prepara valores para inserção
+                values = []
+                for timestamp, row in dados_novos.iterrows():
+                    # Converte timestamp para string UTC
+                    timestamp_str = timestamp.strftime('%Y-%m-%d %H:%M:%S')
+                    values.append((
                         ativo,
                         timestamp_str,
                         float(row['Open']),
@@ -679,21 +327,24 @@ CREATE TABLE IF NOT EXISTS sinais (
                         float(row['Close']),
                         float(row['Volume'])
                     ))
-    
-                # Insere dados em lote
-                cursor.executemany('''
-                    INSERT OR REPLACE INTO precos (
+                
+                # Insere novos dados
+                cursor.executemany("""
+                    INSERT INTO precos (
                         ativo, timestamp, open, high, low, close, volume
                     ) VALUES (?, ?, ?, ?, ?, ?, ?)
-                ''', rows)
-    
+                    ON CONFLICT(ativo, timestamp) DO NOTHING
+                """, values)
+                
                 conn.commit()
+                self.logger.info(f"Salvos {len(values)} novos registros para {ativo}")
                 return True
-    
+
         except Exception as e:
-            self.logger.error(f"Erro ao salvar preços para {ativo}: {str(e)}")
-            return False  
-    # Correção da função get_dados_historicos
+            self.logger.error(f"Erro ao salvar preços novos: {str(e)}")
+            self.logger.error(traceback.format_exc())
+            return False
+    
     async def get_dados_historicos(self, dias: int = 30) -> pd.DataFrame:
         """Recupera dados históricos do banco de dados"""
         try:
@@ -732,136 +383,151 @@ CREATE TABLE IF NOT EXISTS sinais (
             self.logger.error(f"Erro ao recuperar dados históricos: {str(e)}")
             return pd.DataFrame()
         
-    async def get_dados_treino(self) -> pd.DataFrame:
-        """Recupera dados de treino otimizados para ML"""
+    async def get_dados_recentes(self, ativo: str, minutos: int = 30) -> pd.DataFrame:
+        """Obtém dados recentes com cache otimizado"""
         try:
+            cache_key = f"{ativo}_recente"
+            
+            # Verifica cache
+            if (cache_key in self.cache['dados_mercado'] and 
+                (datetime.now() - self.cache_last_update.get(cache_key, datetime.min)).total_seconds() < self.cache_timeout):
+                return self.cache['dados_mercado'][cache_key]
+            
             with self.pool.get_connection() as conn:
-                self.logger.debug("Iniciando recuperação de dados de treino")
-
                 query = """
-                    WITH ultimos_dados AS (
-                        SELECT 
-                            timestamp,
-                            ativo,
-                            open,
-                            high,
-                            low,
-                            close,
-                            volume,
-                            ROW_NUMBER() OVER (PARTITION BY ativo ORDER BY timestamp DESC) as rn
-                        FROM precos
-                        WHERE timestamp >= datetime('now', '-30 days')
-                    )
-                    SELECT 
-                        timestamp,
-                        ativo,
-                        open,
-                        high,
-                        low,
-                        close,
-                        volume
-                    FROM ultimos_dados
-                    WHERE rn <= 43200  -- Últimos 30 dias em minutos
+                    SELECT timestamp, open, high, low, close, volume
+                    FROM precos
+                    WHERE ativo = ?
+                    AND timestamp >= datetime('now', ? || ' minutes')
                     ORDER BY timestamp ASC
                 """
-
+                
                 df = pd.read_sql_query(
-                    query,
-                    conn,
+                    query, 
+                    conn, 
+                    params=(ativo, -minutos),
                     parse_dates=['timestamp']
                 )
-
+                
                 if not df.empty:
-                    # Pivota dados para formato ML
-                    df_pivot = df.pivot(
-                        index='timestamp',
-                        columns='ativo',
-                        values=['open', 'high', 'low', 'close', 'volume']
-                    )
-
-                    # Achata os níveis das colunas
-                    df_pivot.columns = [f"{col[1]}_{col[0]}" for col in df_pivot.columns]
-
-                    self.logger.info(f"Dados de treino recuperados: {len(df_pivot)} registros")
-                    return df_pivot
-
-                self.logger.warning("Nenhum dado de treino encontrado")
-                return pd.DataFrame()
-
+                    # Atualiza cache
+                    self.cache['dados_mercado'][cache_key] = df
+                    self.cache_last_update[cache_key] = datetime.now()
+                    
+                return df
+                
         except Exception as e:
-            self.logger.error(f"Erro ao recuperar dados de treino: {str(e)}")
+            self.logger.error(f"Erro ao obter dados recentes: {str(e)}")
             return pd.DataFrame()
-    
-    async def get_operacoes_periodo(self, inicio: str, fim: str) -> List[Dict]:
-        """Recupera operações em um período específico"""
+        
+    async def salvar_sinal(self, sinal: Dict) -> bool:
+        """Salva sinal no banco de dados"""
         try:
-            with self.pool.get_connection() as conn:
-                cursor = conn.cursor()
-
-                query = '''
-                    SELECT s.*,
-                        julianday(data_processamento) - julianday(timestamp) as duracao
-                    FROM sinais s
-                    WHERE strftime('%H:%M', timestamp) BETWEEN ? AND ?
-                    AND resultado IS NOT NULL
-                    AND timestamp >= datetime('now', '-30 days')
-                    ORDER BY timestamp DESC
-                '''
-
-                cursor.execute(query, (inicio, fim))
-
-                operacoes = []
-                for row in cursor.fetchall():
-                    operacao = dict(row)
-                    # Converte timestamp para datetime se necessário
-                    if isinstance(operacao['timestamp'], str):
-                        operacao['timestamp'] = datetime.strptime(
-                            operacao['timestamp'],
-                            '%Y-%m-%d %H:%M:%S'
-                        )
-                    operacoes.append(operacao)
-
-                return operacoes
-
+            query = """
+            INSERT INTO sinais (
+                ativo, direcao, timestamp, tempo_expiracao, 
+                preco_entrada, score, probabilidade, assertividade,
+                padroes, indicadores, ml_prob, volatilidade
+            ) VALUES (
+                :ativo, :direcao, :timestamp, :tempo_expiracao,
+                :preco_entrada, :score, :probabilidade, :assertividade,
+                :padroes, :indicadores, :ml_prob, :volatilidade
+            )
+            """
+            
+            params = {
+                'ativo': sinal['ativo'],
+                'direcao': sinal['direcao'],
+                'timestamp': sinal['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+                'tempo_expiracao': int(sinal['tempo_expiracao']),
+                'preco_entrada': float(sinal['preco_entrada']),
+                'score': float(sinal['score']),
+                'probabilidade': float(sinal['probabilidade']),
+                'assertividade': float(sinal['assertividade']),
+                'padroes': sinal.get('padroes', '[]'),
+                'indicadores': sinal.get('indicadores', '{}'),
+                'ml_prob': float(sinal.get('ml_prob', 0.0)),
+                'volatilidade': float(sinal.get('volatilidade', 0.0))
+            }
+            
+            return await self.execute(query, params)
+            
         except Exception as e:
-            self.logger.error(f"Erro ao recuperar operações do período: {str(e)}")
-            return []
-
-    async def salvar_analise_completa(self, sinal: Dict) -> bool:
+            self.logger.error(f"Erro ao salvar sinal: {str(e)}")
+            self.logger.error(f"Sinal recebido: {sinal}")
+            return False
+        
+    async def execute(self, query: str, params: dict = None) -> bool:
+        """Executa query com retry automático"""
         try:
             with self.pool.get_connection() as conn:
                 cursor = conn.cursor()
-
-                dados_analise = {
-                    'metricas_ml': {
-                        'probabilidade': sinal['ml_prob'],
-                        'score': sinal.get('score', 0),
-                    },
-                    'analise_tecnica': {
-                        'padroes_forca': sinal['padroes_forca'],
-                        'tendencia': sinal['tendencia'],
-                        'tech_score': sinal.get('tech_score', 0)
-                    },
-                    'analise_mercado': {
-                        'volatilidade': sinal['volatilidade'],
-                        'momento_score': sinal.get('momento_score', 0)
-                    }
-                }
-
-                # Corrigir query
-                cursor.execute("""
-                    INSERT INTO analises_detalhadas (
-                        sinal_id, dados_analise, timestamp
-                    ) VALUES (?, ?, ?)
-                """, (
-                    sinal['id'],
-                    json.dumps(dados_analise),
-                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-                ))
-
+                if params:
+                    cursor.execute(query, params)
+                else:
+                    cursor.execute(query)
                 conn.commit()
                 return True
-
+                
         except Exception as e:
-            self.logger.error(f"Erro ao salvar análise detalhada: {str(e)}")
+            self.logger.error(f"Erro ao executar query: {str(e)}")
+            self.logger.error(f"Query: {query}")
+            self.logger.error(f"Params: {params}")
+            return False
+
+    async def get_dados_periodo(self, ativo: str, inicio: datetime, fim: datetime) -> pd.DataFrame:
+        """Obtém dados de um período específico"""
+        try:
+            with self.pool.get_connection() as conn:
+                query = """
+                    SELECT timestamp, open, high, low, close, volume
+                    FROM precos
+                    WHERE ativo = ?
+                    AND timestamp BETWEEN ? AND ?
+                    ORDER BY timestamp ASC
+                """
+                
+                df = pd.read_sql_query(
+                    query, 
+                    conn, 
+                    params=(
+                        ativo,
+                        inicio.strftime('%Y-%m-%d %H:%M:%S'),
+                        fim.strftime('%Y-%m-%d %H:%M:%S')
+                    ),
+                    parse_dates=['timestamp']
+                )
+                
+                return df
+                
+        except Exception as e:
+            self.logger.error(f"Erro ao obter dados do período: {str(e)}")
+            return pd.DataFrame()
+
+    async def salvar_resultado(self, sinal_id: int, resultado: Dict) -> bool:
+        """Salva resultado do sinal"""
+        try:
+            query = """
+            UPDATE sinais 
+            SET resultado = :resultado,
+                preco_saida = :preco_saida,
+                processado = 1,
+                data_processamento = datetime('now')
+            WHERE id = :id
+            """
+            
+            params = {
+                'id': sinal_id,
+                'resultado': resultado['resultado'],
+                'preco_saida': resultado['preco_saida']
+            }
+            
+            self.logger.debug(f"Query update resultado: {query}")
+            self.logger.debug(f"Params: {params}")
+            
+            return await self.execute(query, params)
+            
+        except Exception as e:
+            self.logger.error(f"Erro ao salvar resultado: {str(e)}")
+            self.logger.error(traceback.format_exc())
             return False

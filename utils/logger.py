@@ -56,14 +56,6 @@ class AlertManager:
             if level in ['CRITICAL', 'ERROR']:
                 self.critical_alerts.append(alert)
 
-    def get_active_alerts(self, min_level: str = 'WARNING') -> List[Dict]:
-        """Retorna alertas ativos acima do nível especificado"""
-        with self.lock:
-            min_level_value = self.alert_levels.get(min_level, 0)
-            return [
-                alert for alert in self.alerts
-                if self.alert_levels.get(alert['level'], 0) >= min_level_value
-            ]
 
 class TradingLogger:
     def __init__(self, log_dir: str = 'data', max_files: int = 5):
@@ -122,6 +114,13 @@ class TradingLogger:
             'error_count': 0
         }
 
+        self.metricas = {
+            'ultima_analise': None,
+            'sinais_detectados': 0,
+            'erros_consecutivos': 0,
+            'tempo_sem_sinais': 0
+        }
+
     def _log_with_context(self, level: str, message: str, data: Dict = None, 
                          context: Dict = None, alert: bool = False):
         """Registra log com contexto adicional"""
@@ -177,8 +176,6 @@ class TradingLogger:
     def debug(self, message: str, data: Dict = None, context: Dict = None):
         """Registra mensagem de debug com dados detalhados"""
         self._log_with_context('DEBUG', message, data, context)
-
-
 
 class ColoredConsoleHandler(logging.StreamHandler):
     """Handler personalizado para console com cores"""

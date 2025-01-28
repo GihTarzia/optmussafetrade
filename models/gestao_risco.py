@@ -13,8 +13,8 @@ class GestaoRiscoAdaptativo:
         self.operacoes = deque(maxlen=1000)
         
         # Parâmetros mais conservadores
-        self.meta_diaria = 0.03  # Reduzido para 3%
-        self.stop_diario = -0.05  # Reduzido para 5%
+        self.meta_diaria = 0.03  # Aumentar para 5%
+        self.stop_diario = -0.05  # Aumentar para -7%
         
         # Métricas expandidas
         self.metricas = {
