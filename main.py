@@ -74,7 +74,9 @@ class TradingSystem:
         self.ml_predictor = MLPredictor(self.config, self.logger)
         self.analise_padroes = AnalisePadroesComplexos(self.config, self.logger)
         self.gestao_risco = GestaoRiscoAdaptativo(self.config, self.logger)
-
+        self.dados_buffer = {}
+        self.min_registros_necessarios = 30
+        
     async def executar(self):
         """Executa o sistema de trading"""
         try:
@@ -612,6 +614,22 @@ class TradingSystem:
                     self.logger.warning(f"Sem dados para {ativo}")
                     continue
                     
+                            # Gerencia buffer de dados
+                if ativo not in self.dados_buffer:
+                    self.dados_buffer[ativo] = dados
+                else:
+                    # Concatena novos dados mantendo histórico
+                    self.dados_buffer[ativo] = pd.concat([
+                        self.dados_buffer[ativo],
+                        dados
+                    ]).drop_duplicates()
+                            # Usa últimos N registros para análise
+                dados_analise = self.dados_buffer[ativo].tail(50)  # Mantém margem extra
+                
+                if len(dados_analise) < self.min_registros_necessarios:
+                    self.logger.warning(f"Dados insuficientes para {ativo}: {len(dados_analise)}")
+                    continue
+            
                 # Log dos preços atuais
                 self.logger.info(f"""
                 Preços {ativo}:

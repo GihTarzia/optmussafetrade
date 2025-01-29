@@ -29,7 +29,6 @@ class AnalisePadroesComplexos:
 
             ultimo = dados.iloc[-1]
             penultimo = dados.iloc[-2]
-            antepenultimo = dados.iloc[-3]
 
             # Volume médio
             volume_medio = dados['volume'].rolling(20).mean().iloc[-1]

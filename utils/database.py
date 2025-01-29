@@ -383,7 +383,7 @@ class DatabaseManager:
             self.logger.error(f"Erro ao recuperar dados históricos: {str(e)}")
             return pd.DataFrame()
         
-    async def get_dados_recentes(self, ativo: str, minutos: int = 30) -> pd.DataFrame:
+    async def get_dados_recentes(self, ativo: str, minutos: int = 60) -> pd.DataFrame:
         """Obtém dados recentes com cache otimizado"""
         try:
             cache_key = f"{ativo}_recente"

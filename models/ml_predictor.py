@@ -46,6 +46,11 @@ class MLPredictor:
                 'random_state': 42
             },
         }
+        # Ajuste os parâmetros do RSI e MACD
+        self.parametros_indicadores = {
+            'rsi_periodo': 7,  # Reduzido para 7
+            'macd_periodos': (5, 13, 3)  # Ajuste para MACD
+        }
         
         # Sugestão: reduzir temporariamente para testar
         self.min_probabilidade = 0.65  # Reduzir para 65%
@@ -675,8 +680,8 @@ class MLPredictor:
         """Prepara features para o modelo"""
         try:
             # Verifica dados mínimos
-            if len(dados) < 14:  # Mínimo para RSI
-                self.logger.warning(f"Dados insuficientes para {ativo}: {len(dados)} registros. Mínimo 14 necessário.")
+            if len(dados) < 30:  # Mínimo para RSI
+                self.logger.warning(f"Dados insuficientes para {ativo}: {len(dados)} registros. Mínimo 30 necessário.")
                 return None
             
             # Padroniza nomes das colunas
@@ -686,16 +691,16 @@ class MLPredictor:
             features = pd.DataFrame(index=dados.index)
             
             # RSI (precisa de pelo menos 14 períodos)
-            rsi = ta.momentum.RSIIndicator(dados['close'], window=14).rsi()
+            rsi = ta.momentum.RSIIndicator(dados['close'], window=self.parametros_indicadores['rsi_periodo']).rsi()
             features['rsi'] = rsi
             
             # MACD com períodos menores (5,13,3 em vez de 12,26,9)
             macd = ta.trend.MACD(
                 dados['close'],
-                window_fast=5,    # Era 12
-                window_slow=13,   # Era 26
-                window_sign=3     # Era 9
-            )
+                window_fast=self.parametros_indicadores['macd_periodos'][0],
+                window_slow=self.parametros_indicadores['macd_periodos'][1],
+                window_sign=self.parametros_indicadores['macd_periodos'][2]
+                )
             features['macd'] = macd.macd()
             features['macd_signal'] = macd.macd_signal()
         
