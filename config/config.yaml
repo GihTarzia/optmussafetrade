@@ -107,17 +107,11 @@ analise:
   confirmacoes_necessarias: 3  # Aumentado
 
 volatilidade:
-  min: 0.0005  # Ajustado para escala diária
-  max: 0.025   # Ajustado para escala diária
-  periodo_calculo: 20
-  filtro_outliers: true
-  peso: 1.8
+  min: 0.000070  # Reduzido de 0.000120
+  max: 0.004200  # Mantido o mesmo valor
 
 volume:
-  min_padrao: 1000
-  multiplicador_media: 1.5
-  periodo_media: 20
-  peso: 1.2
+  min_ratio: 0.8  # Reduzido de 1.00
 
 ativos:
   forex:  # Pares mais líquidos

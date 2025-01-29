@@ -8,6 +8,12 @@ import yfinance as yf
 from pathlib import Path
 import pytz
 import json
+from models.analise_tendencias import AnaliseTendencias
+from models.ranking_sinais import RankingSinais
+from models.validacao_mercado import ValidacaoMercado
+from models.filtros_avancados import FiltrosAvancados
+from models.sistema_pontuacao import SistemaPontuacao
+from models.validacao_sinais import ValidacaoSinais
 
 # Adiciona o diretório raiz ao PATH
 project_root = Path(__file__).parent
@@ -89,7 +95,8 @@ class TradingSystem:
             tasks = [
                 asyncio.create_task(self.loop_verificar_sinais()),
                 asyncio.create_task(self.loop_verificar_resultados()),
-                asyncio.create_task(self.loop_atualizar_dados())
+                asyncio.create_task(self.loop_atualizar_dados()),
+                asyncio.create_task(self.monitorar_performance())  # Nova task
             ]
             
             # Aguarda todas as tasks
@@ -600,11 +607,53 @@ class TradingSystem:
             except Exception as e:
                 self.logger.error(f"Erro ao limpar cache: {str(e)}")
 
+    async def monitorar_performance(self):
+        """Monitora performance a cada hora"""
+        while True:
+            try:
+                await asyncio.sleep(3600)  # 1 hora
+                
+                self.logger.info("=== Iniciando Análise de Performance ===")
+                performance = await self.db.analisar_performance_detalhada()
+                
+                # Analisa win rate por classificação
+                for classificacao, dados in performance.items():
+                    win_rate = dados['win_rate']
+                    self.logger.info(f"Classificação {classificacao}: {win_rate:.1f}% win rate")
+                    
+                    # Ajusta filtros automaticamente
+                    if win_rate < 55:  # Win rate muito baixo
+                        self.logger.info(f"Ajustando filtros para {classificacao} - Win rate baixo")
+                        self.sistema_pontuacao.ajustar_limites(classificacao, 'aumentar')
+                    elif win_rate > 75:  # Win rate muito alto
+                        self.logger.info(f"Mantendo filtros para {classificacao} - Win rate ótimo")
+                
+                # Log do resultado
+                self.logger.info("Análise de Performance Concluída")
+                
+            except Exception as e:
+                self.logger.error(f"Erro no monitoramento: {str(e)}")
+                await asyncio.sleep(60)  # Espera 1 minuto em caso de erro
+
     async def verificar_sinais(self):
         """Verifica sinais para cada ativo"""
         try:
             self.logger.info("=== Iniciando verificação de sinais ===")
             
+            # Instancia ValidacaoMercado se ainda não existe
+            if not hasattr(self, 'validacao_mercado'):
+                self.validacao_mercado = ValidacaoMercado(self.logger)
+            if not hasattr(self, 'filtros_avancados'):
+                self.filtros_avancados = FiltrosAvancados(self.logger)
+            if not hasattr(self, 'sistema_pontuacao'):
+                self.sistema_pontuacao = SistemaPontuacao(self.logger)
+            if not hasattr(self, 'analise_tendencias'):
+                self.analise_tendencias = AnaliseTendencias(self.logger)
+            if not hasattr(self, 'validacao_sinais'):
+                self.validacao_sinais = ValidacaoSinais(self.logger)             
+            if not hasattr(self, 'ranking_sinais'):
+                self.ranking_sinais = RankingSinais(self.logger)
+                                             
             for ativo in self.config.get_ativos_ativos():
                 # Log detalhado por ativo
                 self.logger.info(f"\nAnalisando {ativo}...")
@@ -614,7 +663,19 @@ class TradingSystem:
                     self.logger.warning(f"Sem dados para {ativo}")
                     continue
                     
-                            # Gerencia buffer de dados
+                # Nova validação de mercado
+                validacao = self.validacao_mercado.validar_condicoes(dados)
+                if not validacao['valido']:
+                    self.logger.info(f"Mercado não válido para {ativo}: {validacao['mensagem']}")
+                    continue
+                
+                # Novos filtros avançados
+                filtros = self.filtros_avancados.analisar_filtros(dados, ativo)
+                if not filtros['valido']:
+                    self.logger.info(f"Filtros não válidos para {ativo}: {filtros['mensagem']}")
+                    continue
+            
+                # Gerencia buffer de dados
                 if ativo not in self.dados_buffer:
                     self.dados_buffer[ativo] = dados
                 else:
@@ -625,23 +686,144 @@ class TradingSystem:
                     ]).drop_duplicates()
                             # Usa últimos N registros para análise
                 dados_analise = self.dados_buffer[ativo].tail(50)  # Mantém margem extra
-                
+
                 if len(dados_analise) < self.min_registros_necessarios:
                     self.logger.warning(f"Dados insuficientes para {ativo}: {len(dados_analise)}")
                     continue
             
                 # Log dos preços atuais
                 self.logger.info(f"""
-                Preços {ativo}:
-                - Atual: {dados['close'].iloc[-1]:.5f}
-                - Máximo: {dados['high'].iloc[-1]:.5f}
-                - Mínimo: {dados['low'].iloc[-1]:.5f}
-                - Volume: {dados['volume'].iloc[-1]:.2f}
+                    Preços {ativo}:
+                    - Atual: {dados['close'].iloc[-1]:.5f}
+                    - Máximo: {dados['high'].iloc[-1]:.5f}
+                    - Mínimo: {dados['low'].iloc[-1]:.5f}
+                    - Volume: {dados['volume'].iloc[-1]:.2f}
+                    - Volatilidade: {validacao['detalhes'].get('volatilidade', 0):.6f}
+                    - Volume Ratio: {validacao['detalhes'].get('volume_ratio', 0):.2f}
                 """)
                 
                 # Análise ML
                 predicao = await self.ml_predictor.prever(dados, ativo)
                 if predicao:
+                    # Nova análise de tendências
+                    analise = await self.analise_tendencias.analisar(dados)
+                    if analise:
+                        # Validação de tendência
+                        if analise['confianca'] < 70:  # Mínimo de 70% de confiança
+                            self.logger.info(f"Confiança insuficiente na tendência: {analise['confianca']:.2f}%")
+                            continue
+
+                        # Validação de força
+                        if analise['forca'] < 60:  # Mínimo de 60 de força
+                            self.logger.info(f"Força insuficiente na tendência: {analise['forca']:.2f}")
+                            continue
+                        
+                        # Verifica alinhamento com predição
+                        if predicao and predicao['direcao'] != analise['tendencia']:
+                            self.logger.info("Predição não alinhada com tendência")
+                            continue
+                        
+                        # Adiciona informações de tendência ao sinal
+                        predicao.update({
+                            'tendencia': analise['tendencia'],
+                            'forca_tendencia': analise['forca'],
+                            'confianca_tendencia': analise['confianca'],
+                            'suporte': analise['suporte'],
+                            'resistencia': analise['resistencia'],
+                            'detalhes_tendencia': analise['detalhes']
+                        })
+                    
+                    # Calcula ranking do sinal
+                    ranking = await self.ranking_sinais.calcular_ranking(predicao, dados)
+            
+                    if ranking['classificacao'] in ['RUIM', 'FRACO']:
+                        self.logger.info(f"Sinal com classificação baixa: {ranking['classificacao']}")
+                        continue
+
+                    if ranking['recomendacao'] == 'AGUARDAR':
+                        self.logger.info("Recomendação para aguardar")
+                        continue
+            
+                    # Adiciona informações de ranking ao sinal
+                    predicao.update({
+                        'ranking_score': ranking['score_final'],
+                        'ranking_classificacao': ranking['classificacao'],
+                        'ranking_confianca': ranking['confianca'],
+                        'ranking_recomendacao': ranking['recomendacao'],
+                        'ranking_detalhes': ranking['detalhes']
+                    })
+
+                    # Validação de Volume
+                    volume_ok = self.analise_padroes._validar_volume(dados)
+                    self.logger.info(f"Volume válido para {ativo}: {volume_ok}")
+                    
+                    score = self.sistema_pontuacao.calcular_score(dados, predicao)
+                    if not score['valido']:
+                        self.logger.info(f"Score insuficiente para {ativo}: {score['score_final']:.2f}")
+                        continue
+                    
+                    # Verifica performance histórica da qualidade
+                    performance = await self.analisador_performance.analisar_performance_por_qualidade()
+                    qualidade_atual = score['qualidade']
+                    
+                    # Filtra baseado na performance histórica
+                    if qualidade_atual in performance['score_qualidade'].values:
+                        win_rate_qualidade = float(
+                            performance[
+                                performance['score_qualidade'] == qualidade_atual
+                            ]['win_rate'].iloc[0]
+                        )
+
+                        if win_rate_qualidade < 55:  # Win rate mínimo
+                            self.logger.info(
+                                f"Qualidade {qualidade_atual} com win rate histórico baixo: {win_rate_qualidade:.1f}%"
+                            )
+                            continue
+                
+                    # Ajusta tempo de expiração baseado no score
+                    if score['score_final'] >= 80:
+                        predicao['tempo_expiracao'] = 3  # Mais curto para sinais fortes
+                    elif score['score_final'] >= 70:
+                        predicao['tempo_expiracao'] = 4
+                    else:
+                        predicao['tempo_expiracao'] = 5  # Mais longo para sinais mais fracos
+                
+                    # Adiciona informações de score ao sinal
+                    predicao.update({
+                        'score': score['score_final'],
+                        'qualidade': score['qualidade'],
+                        'scores_detalhados': score['scores_detalhados']
+                    })
+                
+                    # Adiciona score ao sinal
+                    predicao['score'] = score['score_final']
+                    predicao['qualidade'] = score['qualidade']
+                    predicao['scores_detalhados'] = score['scores_detalhados']
+                
+                
+                    # Nova validação rigorosa
+                    validacao = await self.validacao_sinais.validar_sinal(
+                        dados=dados,
+                        sinal=predicao,
+                        tendencia=analise
+                    )
+
+                    if not validacao['valido']:
+                        self.logger.info(f"Sinal rejeitado para {ativo}:")
+                        for rejeicao in validacao['rejeicoes']:
+                            self.logger.info(f"- {rejeicao}")
+                        continue
+                    
+                    # Adiciona informações de validação ao sinal
+                    predicao.update({
+                        'confirmacoes': validacao['confirmacoes'],
+                        'peso_validacao': validacao['peso_total'],
+                        'detalhes_validacao': validacao['detalhes']
+                    })
+                
+                
+                
+                
                     # Análise de Padrões
                     padroes = await self.analise_padroes.analisar(dados)
                     padroes_str = json.dumps([{
@@ -700,16 +882,8 @@ class TradingSystem:
                         self.logger.info(f"Sinal salvo e enviado com sucesso para {ativo}")
                     else:
                         self.logger.error(f"Erro ao salvar sinal para {ativo}")
-                
-                # Análise de Padrões
-                padroes = await self.analise_padroes.analisar(dados)
-                if padroes:
-                    self.logger.info(f"Padrões encontrados para {ativo}: {padroes}")
-                
-                # Validação de Volume
-                volume_ok = self.analise_padroes._validar_volume(dados)
-                self.logger.info(f"Volume válido para {ativo}: {volume_ok}")
-                
+
+                 
         except Exception as e:
             self.logger.error(f"Erro ao verificar sinais: {str(e)}")
             self.logger.error(traceback.format_exc())

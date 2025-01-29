@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from dataclasses import dataclass
 from collections import deque
 import optuna
@@ -121,7 +121,7 @@ class AutoAjuste:
             self.logger.error(f"Erro ao avaliar parâmetros para o período {periodo}: {str(e)}")
             return {}
         
-    def _dividir_dados(self, dados: pd.DataFrame, proporcao_treino: float = 0.7) -> (pd.DataFrame, pd.DataFrame):
+    def _dividir_dados(self, dados: pd.DataFrame, proporcao_treino: float = 0.7) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Divide os dados em conjuntos de treino e teste"""
         try:
             tamanho_treino = int(len(dados) * proporcao_treino)

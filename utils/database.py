@@ -103,17 +103,29 @@ class DatabaseManager:
                         score REAL NOT NULL,
                         assertividade REAL NOT NULL DEFAULT 50.0,
                         resultado TEXT,
+
+                        tendencia TEXT,
+                        forca_tendencia REAL,
+                        confianca_tendencia REAL,
+                    
                         padroes TEXT,
-                        indicadores TEXT,
-                        ml_prob REAL,
-                        volatilidade REAL,
+                        forca_padroes REAL,
+                    
+                        confirmacoes TEXT,
+                        peso_validacao REAL,
+                    
+                        ranking_score REAL,
+                        ranking_classificacao TEXT,
+                        ranking_confianca REAL,
+                        ranking_recomendacao TEXT,
+                    
+                        detalhes_validacao TEXT,
+                        detalhes_tendencia TEXT,
+                        ranking_detalhes TEXT,
+                    
                         processado BOOLEAN DEFAULT 0,
                         data_processamento DATETIME,
-                        momentum_score REAL,
-                        momento_entrada DATETIME,
-                        probabilidade REAL NOT NULL DEFAULT 0,
-                        
-                        -- Restrição de unicidade para evitar duplicatas
+
                         UNIQUE(ativo, timestamp, direcao, preco_entrada, tempo_expiracao)
                     )
                 ''')     
@@ -424,30 +436,59 @@ class DatabaseManager:
         """Salva sinal no banco de dados"""
         try:
             query = """
-            INSERT INTO sinais (
-                ativo, direcao, timestamp, tempo_expiracao, 
-                preco_entrada, score, probabilidade, assertividade,
-                padroes, indicadores, ml_prob, volatilidade
-            ) VALUES (
-                :ativo, :direcao, :timestamp, :tempo_expiracao,
-                :preco_entrada, :score, :probabilidade, :assertividade,
-                :padroes, :indicadores, :ml_prob, :volatilidade
+ INSERT INTO sinais (
+            ativo, direcao, timestamp, tempo_expiracao, 
+            preco_entrada, score, assertividade,
+            tendencia, forca_tendencia, confianca_tendencia,
+            padroes, forca_padroes,
+            confirmacoes, peso_validacao,
+            ranking_score, ranking_classificacao, 
+            ranking_confianca, ranking_recomendacao,
+            detalhes_validacao, detalhes_tendencia, ranking_detalhes
+        ) VALUES (
+            :ativo, :direcao, :timestamp, :tempo_expiracao,
+            :preco_entrada, :score, :assertividade,
+            :tendencia, :forca_tendencia, :confianca_tendencia,
+            :padroes, :forca_padroes,
+            :confirmacoes, :peso_validacao,
+            :ranking_score, :ranking_classificacao,
+            :ranking_confianca, :ranking_recomendacao,
+            :detalhes_validacao, :detalhes_tendencia, :ranking_detalhes
             )
             """
             
             params = {
-                'ativo': sinal['ativo'],
-                'direcao': sinal['direcao'],
-                'timestamp': sinal['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
-                'tempo_expiracao': int(sinal['tempo_expiracao']),
-                'preco_entrada': float(sinal['preco_entrada']),
-                'score': float(sinal['score']),
-                'probabilidade': float(sinal['probabilidade']),
-                'assertividade': float(sinal['assertividade']),
-                'padroes': sinal.get('padroes', '[]'),
-                'indicadores': sinal.get('indicadores', '{}'),
-                'ml_prob': float(sinal.get('ml_prob', 0.0)),
-                'volatilidade': float(sinal.get('volatilidade', 0.0))
+            'ativo': sinal['ativo'],
+            'direcao': sinal['direcao'],
+            'timestamp': sinal['timestamp'].strftime('%Y-%m-%d %H:%M:%S'),
+            'tempo_expiracao': int(sinal['tempo_expiracao']),
+            'preco_entrada': float(sinal['preco_entrada']),
+            'score': float(sinal['score']),
+            'assertividade': float(sinal['assertividade']),
+            
+            # Campos de tendência
+            'tendencia': sinal.get('tendencia'),
+            'forca_tendencia': float(sinal.get('forca_tendencia', 0)),
+            'confianca_tendencia': float(sinal.get('confianca_tendencia', 0)),
+            
+            # Campos de padrões
+            'padroes': json.dumps(sinal.get('padroes', [])),
+            'forca_padroes': float(sinal.get('forca_padroes', 0)),
+            
+            # Campos de validação
+            'confirmacoes': json.dumps(sinal.get('confirmacoes', [])),
+            'peso_validacao': float(sinal.get('peso_validacao', 0)),
+            
+            # Campos de ranking
+            'ranking_score': float(sinal.get('ranking_score', 0)),
+            'ranking_classificacao': sinal.get('ranking_classificacao'),
+            'ranking_confianca': float(sinal.get('ranking_confianca', 0)),
+            'ranking_recomendacao': sinal.get('ranking_recomendacao'),
+            
+            # Campos de detalhes
+            'detalhes_validacao': json.dumps(sinal.get('detalhes_validacao', {})),
+            'detalhes_tendencia': json.dumps(sinal.get('detalhes_tendencia', {})),
+            'ranking_detalhes': json.dumps(sinal.get('ranking_detalhes', {}))
             }
             
             return await self.execute(query, params)
@@ -531,3 +572,103 @@ class DatabaseManager:
             self.logger.error(f"Erro ao salvar resultado: {str(e)}")
             self.logger.error(traceback.format_exc())
             return False
+        
+        
+        
+    async def analisar_correlacao_scores(self):
+        """Analisa correlação entre scores e resultados"""
+        query = """
+        SELECT 
+            score,
+            score_tendencia,
+            score_momentum,
+            score_volume,
+            resultado
+        FROM sinais
+        WHERE resultado IS NOT NULL
+        AND timestamp >= datetime('now', '-30 days')
+        """
+        
+        with self.db.pool.get_connection() as conn:
+            df = pd.read_sql_query(query, conn)
+            
+            # Converte resultado para binário
+            df['win'] = df['resultado'].apply(lambda x: 1 if x == 'WIN' else 0)
+            
+            # Calcula correlações
+            correlacoes = df[[
+                'score', 'score_tendencia', 'score_momentum', 
+                'score_volume', 'win'
+            ]].corr()['win'].sort_values(ascending=False)
+            
+            self.logger.info(f"Correlações com resultado:\n{correlacoes}")
+            
+            return correlacoes
+
+    async def ajustar_pesos_scores(self):
+        """Ajusta pesos dos scores baseado na performance"""
+        correlacoes = await self.analisar_correlacao_scores()
+        
+        # Normaliza correlações positivas para usar como pesos
+        pesos = correlacoes[correlacoes > 0]
+        pesos = pesos / pesos.sum()
+        
+        return dict(pesos)
+
+    async def analisar_performance_por_qualidade(self):
+        """Analisa taxa de acerto por nível de qualidade"""
+        query = """
+        SELECT 
+            score_qualidade,
+            COUNT(*) as total,
+            SUM(CASE WHEN resultado = 'WIN' THEN 1 ELSE 0 END) as wins,
+            AVG(CASE WHEN resultado = 'WIN' THEN 1 ELSE 0 END) * 100 as win_rate
+        FROM sinais
+        WHERE resultado IS NOT NULL
+        AND timestamp >= datetime('now', '-30 days')
+        GROUP BY score_qualidade
+        ORDER BY win_rate DESC
+        """
+        
+        with self.db.pool.get_connection() as conn:
+            df = pd.read_sql_query(query, conn)
+            self.logger.info(f"Performance por qualidade:\n{df}")
+            return df
+
+
+    async def analisar_performance_detalhada(self):
+        """Analisa performance considerando todos os aspectos do sinal"""
+        query = """
+        SELECT 
+            resultado,
+            ranking_classificacao,
+            ranking_score,
+            ranking_confianca,
+            forca_tendencia,
+            peso_validacao
+        FROM sinais
+        WHERE resultado IS NOT NULL
+        AND timestamp >= datetime('now', '-30 days')
+        """
+
+        with self.pool.get_connection() as conn:
+            df = pd.read_sql_query(query, conn)
+
+            # Análise por classificação
+            performance_classificacao = df.groupby('ranking_classificacao').agg({
+                'resultado': lambda x: (x == 'WIN').mean() * 100
+            }).rename(columns={'resultado': 'win_rate'})
+
+            # Análise por faixa de score
+            df['faixa_score'] = pd.qcut(df['ranking_score'], q=5)
+            performance_score = df.groupby('faixa_score').agg({
+                'resultado': lambda x: (x == 'WIN').mean() * 100
+            })
+
+            self.logger.info(f"""
+            Performance por Classificação:
+            {performance_classificacao}
+
+            Performance por Faixa de Score:
+            {performance_score}
+            """)
