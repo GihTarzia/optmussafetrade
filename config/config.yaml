@@ -176,8 +176,8 @@ ml_config:
   min_confirmacoes: 4
   learning_rate: 0.01
   n_estimators: 500
-  min_probabilidade: 0.78
-  min_accuracy: 0.65
+  min_probabilidade: 0.55
+  min_accuracy: 0.55
 
 gerenciamento_risco:
   fator_kelly: 0.3

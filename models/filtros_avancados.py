@@ -14,8 +14,8 @@ class FiltrosAvancados:
                 'fim': 11,
                 'vol_min': 0.00001,
                 'vol_max': 0.004,
-                'volume_min_ratio': 1.1,  # Espera mais volume na abertura
-                'score_min': 0.70  # Score mínimo mais alto na abertura
+                'volume_min_ratio': 0.9,  # Espera mais volume na abertura
+                'score_min': 0.65  # Score mínimo mais alto na abertura
             },
             'meio_dia': {
                 'inicio': 11,
@@ -30,8 +30,8 @@ class FiltrosAvancados:
                 'fim': 18,
                 'vol_min': 0.0001,
                 'vol_max': 0.0035,
-                'volume_min_ratio': 1.0,
-                'score_min': 0.70
+                'volume_min_ratio': 0.9,
+                'score_min': 0.65
             }
         }
         
@@ -39,11 +39,11 @@ class FiltrosAvancados:
         self.config_pares = {
             'JPY': {
                 'vol_multiplicador': 1.2,  # JPY tende a ter mais volatilidade
-                'volume_min_ratio': 1.0
+                'volume_min_ratio': 0.9
             },
             'GBP': {
                 'vol_multiplicador': 1.1,
-                'volume_min_ratio': 1.0
+                'volume_min_ratio': 0.9
             }
         }
 

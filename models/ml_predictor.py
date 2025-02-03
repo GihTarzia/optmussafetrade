@@ -52,9 +52,6 @@ class MLPredictor:
             'macd_periodos': (5, 13, 3)  # Ajuste para MACD
         }
         
-        # Sugestão: reduzir temporariamente para testar
-        self.min_probabilidade = 0.65  # Reduzir para 65%
-        self.min_accuracy = 0.60       # Reduzir para 60%
         
     async def inicializar_modelos(self):
         """Inicializa ou carrega modelos para cada ativo"""
@@ -217,27 +214,37 @@ class MLPredictor:
             prob_call = float(probabilidades[-1][1])
             
             # 1. Exige probabilidade mínima de 72% (aumentado de 70%)
-            if max(prob_put, prob_call) < 0.72:
+            if max(prob_put, prob_call) < 0.65:
                 self.logger.info(f"Probabilidade insuficiente: PUT={prob_put:.4f}, CALL={prob_call:.4f}")
                 return None
             
+            # 2. Análise de Tendência mais robusta
+            sma_curta = dados['close'].rolling(7).mean()
+            sma_media = dados['close'].rolling(14).mean()  # Adicionada média intermediária
+            sma_longa = dados['close'].rolling(30).mean()
+            
+            tendencia_curta = sma_curta.iloc[-1] > sma_media.iloc[-1]
+            tendencia_media = sma_media.iloc[-1] > sma_longa.iloc[-1]
+            tendencia_longa = dados['close'].iloc[-1] > sma_longa.iloc[-1]
+            
+            forca_tendencia = (tendencia_curta * 1 + tendencia_media * 2 + tendencia_longa * 3) / 6  # Valor entre 0 e 1
+
             # Define direção com base na maior probabilidade
             direcao = 'CALL' if prob_call > prob_put else 'PUT'
             prob = prob_call if direcao == 'CALL' else prob_put
-            
-            # 2. Análise de Tendência mais robusta
-            sma_curta = dados['close'].rolling(5).mean()
-            sma_media = dados['close'].rolling(10).mean()  # Adicionada média intermediária
-            sma_longa = dados['close'].rolling(20).mean()
-            
-            tendencia_curta = sma_curta.iloc[-1] > sma_media.iloc[-1]
-            tendencia_longa = sma_media.iloc[-1] > sma_longa.iloc[-1]
-            
+            if direcao == 'CALL':
+                prob = prob * (0.9 + 0.3 * forca_tendencia)
+            else:  # PUT
+                prob = prob * (1.1 - 0.3 * forca_tendencia)
+
             # Exige concordância das tendências
-            if direcao == 'CALL' and not (tendencia_curta and tendencia_longa):
+            # Permite CALL se tendência longa for positiva e uma das outras for neutra
+            if direcao == 'CALL' and not (tendencia_longa or (tendencia_media and tendencia_curta)):
                 self.logger.info("CALL rejeitado: tendências não confirmam")
-                return None
-            elif direcao == 'PUT' and (tendencia_curta or tendencia_longa):
+                return None         
+
+            # Permite PUT se tendência curta e média forem negativas (mesmo se a longa estiver neutra)
+            elif direcao == 'PUT' and (tendencia_curta and tendencia_media and not tendencia_longa):
                 self.logger.info("PUT rejeitado: tendências não confirmam")
                 return None
             
@@ -266,10 +273,10 @@ class MLPredictor:
                     return None
                 
             else:  # PUT
-                if mom_curto > -0.02:  # Momentum mínimo de -0.02% no curto prazo
+                if mom_curto > -0.01:  # Momentum mínimo de -0.02% no curto prazo
                     self.logger.info(f"Momentum curto muito fraco para PUT: {mom_curto:.4f}")
                     return None
-                if mom_medio > 0:  # Momentum médio precisa ser negativo
+                if mom_medio > 0.005:  # Momentum médio precisa ser negativo
                     self.logger.info(f"Momentum médio positivo para PUT: {mom_medio:.4f}")
                     return None
                 if mom_aceleracao > 0:  # Momentum não pode estar acelerando
@@ -299,11 +306,11 @@ class MLPredictor:
             
             # Ajusta expectativas de volume por período
             if 8 <= hora_atual <= 12:  # Período mais ativo
-                vol_min_ratio = 1.2  # Volume 20% acima da média
+                vol_min_ratio = 1.1  # Volume 20% acima da média
             elif 13 <= hora_atual <= 17:  # Período intermediário
-                vol_min_ratio = 1.1  # Volume 10% acima da média
+                vol_min_ratio = 1.0  # Volume 10% acima da média
             else:  # Períodos menos ativos
-                vol_min_ratio = 1.3  # Exige mais volume para confirmar movimento
+                vol_min_ratio = 1.2  # Exige mais volume para confirmar movimento
             
             # Validações de volume
             if volume_ratio < vol_min_ratio:

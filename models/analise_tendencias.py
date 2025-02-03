@@ -11,7 +11,7 @@ class AnaliseTendencias:
             'periodos_curto': 9,
             'periodos_medio': 21,
             'periodos_longo': 50,
-            'min_forca_tendencia': 25,  # ADX mínimo
+            'min_forca_tendencia': 20,  # ADX mínimo
             'min_inclinacao': 0.001,    # Inclinação mínima
             'volume_confirmacao': 1.2    # Volume 20% acima da média
         }

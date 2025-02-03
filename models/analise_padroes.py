@@ -25,7 +25,7 @@ class AnalisePadroesComplexos:
         self.padroes_config = {
             'candles_analise': 30,  # Número de candles para análise
             'min_tamanho_padrao': 3,  # Mínimo de candles para formar padrão
-            'min_forca_padrao': 0.7,  # Força mínima do padrão (0-1)
+            'min_forca_padrao': 0.6,  # Força mínima do padrão (0-1)
             'confirmacao_volume': 1.2,  # Volume mínimo para confirmação
             'tempo_exp_padrao': {
                 'fraco': 2,    # Padrões fracos

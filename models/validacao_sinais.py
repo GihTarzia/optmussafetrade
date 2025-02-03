@@ -9,19 +9,19 @@ class ValidacaoSinais:
         # Configurações de validação
         self.config = {
             'rsi': {
-                'sobrecomprado': 70,
-                'sobrevendido': 30,
-                'neutro_min': 45,
-                'neutro_max': 55
+                'sobrecomprado': 65,
+                'sobrevendido': 35,
+                'neutro_min': 40,
+                'neutro_max': 60
             },
             'volume': {
-                'min_ratio': 1.2,
+                'min_ratio': 0.8,
                 'tendencia_min': 1.0
             },
             'volatilidade': {
                 'min': 0.0001,
                 'max': 0.003,
-                'ideal_min': 0.0003,
+                'ideal_min': 0.0002,
                 'ideal_max': 0.002
             },
             'tendencia': {
@@ -29,8 +29,8 @@ class ValidacaoSinais:
                 'min_inclinacao': 0.0001
             },
             'confirmacoes': {
-                'minimas': 3,  # Mínimo de confirmações necessárias
-                'peso_minimo': 0.6  # Peso mínimo total das confirmações
+                'minimas': 2,  # Mínimo de confirmações necessárias
+                'peso_minimo': 0.5  # Peso mínimo total das confirmações
             }
         }
 

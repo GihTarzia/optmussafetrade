@@ -637,38 +637,44 @@ class DatabaseManager:
 
 
     async def analisar_performance_detalhada(self):
-        """Analisa performance considerando todos os aspectos do sinal"""
-        query = """
-        SELECT 
-            resultado,
-            ranking_classificacao,
-            ranking_score,
-            ranking_confianca,
-            forca_tendencia,
-            peso_validacao
-        FROM sinais
-        WHERE resultado IS NOT NULL
-        AND timestamp >= datetime('now', '-30 days')
-        """
+        try:
+            """Analisa performance considerando todos os aspectos do sinal"""
+            query = """
+            SELECT 
+                resultado,
+                ranking_classificacao,
+                ranking_score,
+                ranking_confianca,
+                forca_tendencia,
+                peso_validacao
+                FROM sinais
+                WHERE resultado IS NOT NULL
+            AND timestamp >= datetime('now', '-30 days')
+            """
 
-        with self.pool.get_connection() as conn:
-            df = pd.read_sql_query(query, conn)
+            with self.pool.get_connection() as conn:
+                df = pd.read_sql_query(query, conn)
 
-            # Análise por classificação
-            performance_classificacao = df.groupby('ranking_classificacao').agg({
-                'resultado': lambda x: (x == 'WIN').mean() * 100
-            }).rename(columns={'resultado': 'win_rate'})
+                # Análise por classificação
+                performance_classificacao = df.groupby('ranking_classificacao').agg({
+                    'resultado': lambda x: (x == 'WIN').mean() * 100
+                }).rename(columns={'resultado': 'win_rate'})
 
-            # Análise por faixa de score
-            df['faixa_score'] = pd.qcut(df['ranking_score'], q=5)
-            performance_score = df.groupby('faixa_score').agg({
-                'resultado': lambda x: (x == 'WIN').mean() * 100
-            })
+                # Análise por faixa de score
+                df = df.dropna(subset=['ranking_score'])
 
-            self.logger.info(f"""
-            Performance por Classificação:
-            {performance_classificacao}
+                if df['ranking_score'].nunique() >= 5:
+                    df['faixa_score'] = pd.qcut(df['ranking_score'], q=5)
+                else:
+                    self.logger.warning("Poucos valores distintos em ranking_score para aplicar qcut")
+                    df['faixa_score'] = pd.cut(df['ranking_score'], bins=5)
 
-            Performance por Faixa de Score:
-            {performance_score}
-            """)
+                performance_score = df.groupby('faixa_score').agg({
+                    'resultado': lambda x: (x == 'WIN').mean() * 100
+                })
+
+                return performance_classificacao, performance_score
+
+        except Exception as e:
+            self.logger.error(f"Erro ao analisar performance detalhada: {str(e)}")
+            return {}, {}

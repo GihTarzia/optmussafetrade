@@ -9,10 +9,10 @@ class ValidacaoMercado:
         self.horarios_operacao = {
             'inicio': 9,    # 9:00
             'fim': 17,      # 17:00
-            'gap_max': 0.003,  # 0.3%
-            'vol_min': 0.0001, # Volatilidade mínima
-            'vol_max': 0.003,  # Volatilidade máxima
-            'volume_min_ratio': 0.5  # 50% do volume médio
+            'gap_max': 0.005,  # 0.3%
+            'vol_min': 0.00005, # Volatilidade mínima
+            'vol_max': 0.005,  # Volatilidade máxima
+            'volume_min_ratio': 0.3  # 50% do volume médio
         }
 
     def validar_condicoes(self, dados: pd.DataFrame) -> Dict:
@@ -50,7 +50,7 @@ class ValidacaoMercado:
 
             resultados['detalhes']['gap_ratio'] = gap_ratio
 
-            if gap_ratio > 3:  # Gap 3x maior que a média
+            if gap_ratio > 5:  # Gap 3x maior que a média
                 resultados['valido'] = False
                 resultados['mensagem'].append(f"Gap anormal detectado: {gap_ratio:.2f}x média")
 

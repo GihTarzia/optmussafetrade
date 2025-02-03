@@ -124,30 +124,6 @@ class TradingSystem:
             self.logger.error(traceback.format_exc())
             raise
 
-    async def monitorar_desempenho(self):
-        """Monitora desempenho e ajusta parâmetros"""
-        while True:
-            try:
-                metricas = self.gestao_risco.get_estatisticas()
-                
-                # Limpa dados antigos a cada 24 horas
-                await self.db.limpar_dados_antigos(1)
-            
-                # Verifica drawdown
-                if metricas['metricas']['drawdown_atual'] > self.config.get('trading.max_drawdown'):
-                    await self.pausar_operacoes()
-                    await self.auto_ajuste.otimizar_parametros()
-                
-                # Verifica win rate
-                #if metricas['metricas']['win_rate'] < self.config.get('trading.win_rate_minimo'):
-                #    await self.auto_ajuste.ajustar_filtros('aumentar')
-                
-                await asyncio.sleep(300)
-                
-            except Exception as e:
-                self.logger.error(f"Erro no monitoramento: {str(e)}")
-                await asyncio.sleep(60)
-
     async def pausar_operacoes(self):
         """Pausa operações temporariamente"""
         self.operacoes_ativas = False
@@ -820,9 +796,6 @@ class TradingSystem:
                         'peso_validacao': validacao['peso_total'],
                         'detalhes_validacao': validacao['detalhes']
                     })
-                
-                
-                
                 
                     # Análise de Padrões
                     padroes = await self.analise_padroes.analisar(dados)
